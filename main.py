@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from transcription import transcribe_audio_groq
 import subprocess
+import tempfile
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -35,6 +36,37 @@ def extract_audio_from_video(video_path):
         raise RuntimeError(f"ffmpeg audio extraction failed: {process.stderr}")
     return audio_path
 
+def convert_to_mp3(input_path):
+    output_fd, output_path = tempfile.mkstemp(suffix=".mp3")
+    os.close(output_fd)
+    command = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-vn",
+        "-ab", "192k",
+        "-ar", "44100",
+        output_path
+    ]
+    process = subprocess.run(command, capture_output=True, text=True)
+    if process.returncode != 0:
+        os.remove(output_path)
+        raise RuntimeError(f"MP3 conversion failed: {process.stderr}")
+    return output_path
+
+def convert_to_mp4(input_path):
+    output_fd, output_path = tempfile.mkstemp(suffix=".mp4")
+    os.close(output_fd)
+    command = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-c:v", "copy",
+        "-c:a", "aac",
+        output_path
+    ]
+    process = subprocess.run(command, capture_output=True, text=True)
+    if process.returncode != 0:
+        os.remove(output_path)
+        raise RuntimeError(f"MP4 conversion failed: {process.stderr}")
+    return output_path
+
 ffmpeg_installed = check_ffmpeg()
 
 st.markdown("""
@@ -46,24 +78,20 @@ If ffmpeg is available, audio will be extracted automatically from videos for tr
 if not ffmpeg_installed:
     st.warning("⚠️ ffmpeg is NOT installed or not accessible. Audio extraction from video files will not work. Please upload audio files directly.")
 
-# Sidebar: List saved files with playback, download and delete buttons
 st.sidebar.header("Uploaded Files")
 
 def list_uploaded_files():
     files = sorted(Path(UPLOAD_DIR).glob("*"), key=os.path.getmtime, reverse=True)
-    file_list = []
-    for file_path in files:
-        file_list.append(str(file_path))
-    return file_list
+    return [str(file_path) for file_path in files]
 
 uploaded_files = list_uploaded_files()
 
 for file_path_str in uploaded_files:
     file_path = Path(file_path_str)
     file_suffix = file_path.suffix.lower()
-    
+
     st.sidebar.markdown(f"**{file_path.name}**")
-    
+
     if file_suffix in [".mp4", ".mov", ".m4v"]:
         st.sidebar.video(str(file_path))
     elif file_suffix in [".mp3", ".wav", ".m4a", ".aac"]:
@@ -71,7 +99,35 @@ for file_path_str in uploaded_files:
     else:
         st.sidebar.write("Unsupported file format for preview")
 
-    st.sidebar.download_button("Download File", str(file_path), file_name=file_path.name)
+    # Convert and offer downloads in standard formats
+    try:
+        if file_suffix in [".mp3", ".wav", ".m4a", ".aac"]:
+            converted_path = convert_to_mp3(file_path)
+            with open(converted_path, "rb") as f:
+                st.sidebar.download_button(
+                    label=f"Download as MP3",
+                    data=f,
+                    file_name=f"{file_path.stem}.mp3",
+                    mime="audio/mpeg"
+                )
+            os.remove(converted_path)
+
+        elif file_suffix in [".mp4", ".mov", ".m4v"]:
+            converted_path = convert_to_mp4(file_path)
+            with open(converted_path, "rb") as f:
+                st.sidebar.download_button(
+                    label=f"Download as MP4",
+                    data=f,
+                    file_name=f"{file_path.stem}.mp4",
+                    mime="video/mp4"
+                )
+            os.remove(converted_path)
+
+        else:
+            st.sidebar.write("Download not available for this format")
+
+    except Exception as e:
+        st.sidebar.error(f"Error converting for download: {e}")
 
     # Delete button
     if st.sidebar.button(f"Delete {file_path.name}", key=f"del_{file_path.name}"):
@@ -81,7 +137,6 @@ for file_path_str in uploaded_files:
             try:
                 st.experimental_rerun()
             except AttributeError:
-                # fallback: force exit to restart the app
                 import os
                 os._exit(00)
         except Exception as e:
