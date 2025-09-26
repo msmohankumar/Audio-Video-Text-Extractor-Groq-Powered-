@@ -78,7 +78,12 @@ for file_path_str in uploaded_files:
         try:
             os.remove(file_path)
             st.sidebar.success(f"Deleted {file_path.name}")
-            st.experimental_rerun()  # Refresh to update file list after deletion
+            try:
+                st.experimental_rerun()
+            except AttributeError:
+                # fallback: force exit to restart the app
+                import os
+                os._exit(00)
         except Exception as e:
             st.sidebar.error(f"Failed to delete {file_path.name}: {e}")
 
