@@ -4,7 +4,6 @@ from pathlib import Path
 from transcription import transcribe_audio_groq
 import subprocess
 
-# Directories for persistent storage
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -38,20 +37,6 @@ def extract_audio_from_video(video_path):
 
 ffmpeg_installed = check_ffmpeg()
 
-st.sidebar.header("Uploaded Files")
-
-# List saved files with playback and download
-uploaded_files = sorted(Path(UPLOAD_DIR).glob("*"), key=os.path.getmtime, reverse=True)
-for file_path in uploaded_files:
-    file_suffix = file_path.suffix.lower()
-    st.sidebar.markdown(f"**{file_path.name}**")
-    if file_suffix in [".mp4", ".mov", ".m4v"]:
-        st.sidebar.video(str(file_path))
-    elif file_suffix in [".mp3", ".wav", ".m4a", ".aac", ".wav"]:
-        st.sidebar.audio(str(file_path))
-    st.sidebar.download_button("Download", str(file_path), file_name=file_path.name)
-    st.sidebar.markdown("---")
-
 st.markdown("""
 Upload an audio or video file for transcription.
 
@@ -61,6 +46,44 @@ If ffmpeg is available, audio will be extracted automatically from videos for tr
 if not ffmpeg_installed:
     st.warning("⚠️ ffmpeg is NOT installed or not accessible. Audio extraction from video files will not work. Please upload audio files directly.")
 
+# Sidebar: List saved files with playback, download and delete buttons
+st.sidebar.header("Uploaded Files")
+
+def list_uploaded_files():
+    files = sorted(Path(UPLOAD_DIR).glob("*"), key=os.path.getmtime, reverse=True)
+    file_list = []
+    for file_path in files:
+        file_list.append(str(file_path))
+    return file_list
+
+uploaded_files = list_uploaded_files()
+
+for file_path_str in uploaded_files:
+    file_path = Path(file_path_str)
+    file_suffix = file_path.suffix.lower()
+    
+    st.sidebar.markdown(f"**{file_path.name}**")
+    
+    if file_suffix in [".mp4", ".mov", ".m4v"]:
+        st.sidebar.video(str(file_path))
+    elif file_suffix in [".mp3", ".wav", ".m4a", ".aac"]:
+        st.sidebar.audio(str(file_path))
+    else:
+        st.sidebar.write("Unsupported file format for preview")
+
+    st.sidebar.download_button("Download File", str(file_path), file_name=file_path.name)
+
+    # Delete button
+    if st.sidebar.button(f"Delete {file_path.name}", key=f"del_{file_path.name}"):
+        try:
+            os.remove(file_path)
+            st.sidebar.success(f"Deleted {file_path.name}")
+            st.experimental_rerun()  # Refresh to update file list after deletion
+        except Exception as e:
+            st.sidebar.error(f"Failed to delete {file_path.name}: {e}")
+
+st.markdown("---")
+
 uploaded_file = st.file_uploader(
     "Choose file",
     type=[
@@ -69,7 +92,6 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    # Save the uploaded file persistently with unique name
     unique_name = f"{Path(uploaded_file.name).stem}_{int(os.path.getmtime('.'))}{Path(uploaded_file.name).suffix}"
     save_path = os.path.join(UPLOAD_DIR, unique_name)
     with open(save_path, "wb") as f:
