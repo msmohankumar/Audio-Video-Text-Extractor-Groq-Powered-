@@ -16,12 +16,28 @@ def check_ffmpeg():
     except Exception:
         return False
 
+def extract_audio_from_video(video_path):
+    audio_path = os.path.splitext(video_path)[0] + "_extracted.wav"
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i", video_path,
+        "-vn",  # no video
+        "-acodec", "pcm_s16le",  # wav format
+        "-ac", "1",  # mono channel
+        "-ar", "16000",  # 16 kHz sampling rate
+        audio_path
+    ]
+    process = subprocess.run(command, capture_output=True, text=True)
+    if process.returncode != 0:
+        raise RuntimeError(f"ffmpeg audio extraction failed: {process.stderr}")
+    return audio_path
+
 ffmpeg_installed = check_ffmpeg()
 
 st.markdown("""
-Upload an audio file (mp3, wav) for instant transcription.
-
-If you upload a video file (mp4, mov), audio extraction requires `ffmpeg`.
+Upload an audio file (mp3, wav) or a video file (mp4, mov).  
+If ffmpeg is available, audio will be extracted automatically from videos for transcription.
 """)
 
 if not ffmpeg_installed:
@@ -37,17 +53,29 @@ if uploaded_file:
 
     suffix = Path(input_path).suffix.lower()
 
-    if suffix in [".mp4", ".mov"]:
-        st.video(input_path)
-        if not ffmpeg_installed:
-            st.warning("Audio extraction from video requires `ffmpeg`, which is not available. Please upload audio files directly.")
-        else:
-            st.info("ffmpeg detected. You can implement audio extraction here if desired.")
+    try:
+        if suffix in [".mp4", ".mov"]:
+            st.video(input_path)
+            if ffmpeg_installed:
+                st.info("Extracting audio from video...")
+                audio_path = extract_audio_from_video(input_path)
+                st.audio(audio_path)
 
-    elif suffix in [".mp3", ".wav"]:
-        st.audio(input_path)
-        with st.spinner("Transcribing audio with Groq API..."):
-            try:
+                with st.spinner("Transcribing extracted audio..."):
+                    transcript = transcribe_audio_groq(audio_path)
+                    if transcript:
+                        st.success("Transcription complete!")
+                        st.text_area("📄 Extracted Text:", transcript, height=300)
+                        st.download_button("Download Transcript as TXT", transcript,
+                                           file_name=f"{Path(uploaded_file.name).stem}_transcript.txt")
+                    else:
+                        st.warning("No transcription returned.")
+            else:
+                st.warning("Audio extraction requires ffmpeg which is not available. Please upload audio files directly.")
+
+        elif suffix in [".mp3", ".wav"]:
+            st.audio(input_path)
+            with st.spinner("Transcribing audio with Groq API..."):
                 transcript = transcribe_audio_groq(input_path)
                 if transcript:
                     st.success("Transcription complete!")
@@ -56,7 +84,8 @@ if uploaded_file:
                                        file_name=f"{Path(uploaded_file.name).stem}_transcript.txt")
                 else:
                     st.warning("No transcription returned.")
-            except Exception as e:
-                st.error(f"Transcription failed: {e}")
-    else:
-        st.error("Unsupported file type. Please upload mp3, wav, mp4, or mov files.")
+        else:
+            st.error("Unsupported file type. Please upload mp3, wav, mp4, or mov files.")
+
+    except Exception as e:
+        st.error(f"Error during processing: {e}")
