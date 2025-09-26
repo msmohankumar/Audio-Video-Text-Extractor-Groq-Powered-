@@ -1,0 +1,6 @@
+streamlit>=1.9.0
+ffmpeg-python
+requests
+python-dotenv
+pydub
+groq
