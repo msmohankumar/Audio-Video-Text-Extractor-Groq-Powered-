@@ -8,6 +8,8 @@ import tempfile
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+MAX_UPLOAD_SIZE_MB = 10  # Maximum allowed upload size in megabytes
+
 st.set_page_config(page_title="🎤 Audio & Video Text Extractor", page_icon="🎙️", layout="wide")
 
 st.title("🎤 Audio & Video Text Extractor (Groq Powered)")
@@ -152,23 +154,41 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    unique_name = f"{Path(uploaded_file.name).stem}_{int(os.path.getmtime('.'))}{Path(uploaded_file.name).suffix}"
-    save_path = os.path.join(UPLOAD_DIR, unique_name)
-    with open(save_path, "wb") as f:
-        f.write(uploaded_file.read())
+    size_mb = uploaded_file.size / (1024 * 1024)
+    if size_mb > MAX_UPLOAD_SIZE_MB:
+        st.error(f"File too large ({size_mb:.2f} MB). Please upload files smaller than {MAX_UPLOAD_SIZE_MB} MB.")
+    else:
+        unique_name = f"{Path(uploaded_file.name).stem}_{int(os.path.getmtime('.'))}{Path(uploaded_file.name).suffix}"
+        save_path = os.path.join(UPLOAD_DIR, unique_name)
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.read())
 
-    suffix = Path(save_path).suffix.lower()
+        suffix = Path(save_path).suffix.lower()
 
-    try:
-        if suffix in [".mp4", ".mov", ".m4v"]:
-            st.video(save_path)
-            if ffmpeg_installed:
-                st.info("Extracting audio from video...")
-                audio_path = extract_audio_from_video(save_path)
-                st.audio(audio_path)
+        try:
+            if suffix in [".mp4", ".mov", ".m4v"]:
+                st.video(save_path)
+                if ffmpeg_installed:
+                    st.info("Extracting audio from video...")
+                    audio_path = extract_audio_from_video(save_path)
+                    st.audio(audio_path)
 
-                with st.spinner("Transcribing extracted audio..."):
-                    transcript = transcribe_audio_groq(audio_path)
+                    with st.spinner("Transcribing extracted audio..."):
+                        transcript = transcribe_audio_groq(audio_path)
+                        if transcript:
+                            st.success("Transcription complete!")
+                            st.text_area("📄 Extracted Text:", transcript, height=300)
+                            st.download_button("Download Transcript as TXT", transcript,
+                                               file_name=f"{Path(save_path).stem}_transcript.txt")
+                        else:
+                            st.warning("No transcription returned.")
+                else:
+                    st.warning("Audio extraction requires ffmpeg which is not available. Please upload audio files directly.")
+
+            elif suffix in [".mp3", ".wav", ".m4a", ".aac"]:
+                st.audio(save_path)
+                with st.spinner("Transcribing audio with Groq API..."):
+                    transcript = transcribe_audio_groq(save_path)
                     if transcript:
                         st.success("Transcription complete!")
                         st.text_area("📄 Extracted Text:", transcript, height=300)
@@ -177,21 +197,7 @@ if uploaded_file:
                     else:
                         st.warning("No transcription returned.")
             else:
-                st.warning("Audio extraction requires ffmpeg which is not available. Please upload audio files directly.")
+                st.error("Unsupported file type. Please upload a supported audio or video file.")
 
-        elif suffix in [".mp3", ".wav", ".m4a", ".aac"]:
-            st.audio(save_path)
-            with st.spinner("Transcribing audio with Groq API..."):
-                transcript = transcribe_audio_groq(save_path)
-                if transcript:
-                    st.success("Transcription complete!")
-                    st.text_area("📄 Extracted Text:", transcript, height=300)
-                    st.download_button("Download Transcript as TXT", transcript,
-                                       file_name=f"{Path(save_path).stem}_transcript.txt")
-                else:
-                    st.warning("No transcription returned.")
-        else:
-            st.error("Unsupported file type. Please upload a supported audio or video file.")
-
-    except Exception as e:
-        st.error(f"Error during processing: {e}")
+        except Exception as e:
+            st.error(f"Error during processing: {e}")
