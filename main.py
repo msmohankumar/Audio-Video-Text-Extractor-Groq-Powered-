@@ -8,6 +8,9 @@ import tempfile
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+MAX_UPLOAD_SIZE_MB = 10
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
 st.set_page_config(page_title="🎤 Audio & Video Text Extractor", page_icon="🎙️", layout="wide")
 
 st.title("🎤 Audio & Video Text Extractor (Groq Powered)")
@@ -35,6 +38,32 @@ def extract_audio_from_video(video_path):
     if process.returncode != 0:
         raise RuntimeError(f"ffmpeg audio extraction failed: {process.stderr}")
     return audio_path
+
+def compress_audio(input_path, output_path):
+    command = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-vn",
+        "-b:a", "64k",
+        "-ar", "16000",
+        output_path
+    ]
+    process = subprocess.run(command, capture_output=True, text=True)
+    if process.returncode != 0:
+        raise RuntimeError(f"Audio compression failed: {process.stderr}")
+
+def compress_video(input_path, output_path):
+    command = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-vcodec", "libx264",
+        "-crf", "28",
+        "-preset", "fast",
+        "-acodec", "aac",
+        "-b:a", "96k",
+        output_path
+    ]
+    process = subprocess.run(command, capture_output=True, text=True)
+    if process.returncode != 0:
+        raise RuntimeError(f"Video compression failed: {process.stderr}")
 
 def convert_audio(input_path, target_format):
     suffix = "." + target_format
@@ -70,7 +99,6 @@ def convert_video(input_path, target_format):
     suffix = "." + target_format
     output_fd, output_path = tempfile.mkstemp(suffix=suffix)
     os.close(output_fd)
-    # For mov, same codec options as mp4 here, just the extension changes
     command = [
         "ffmpeg", "-y", "-i", input_path,
         "-c:v", "copy",
@@ -166,42 +194,52 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    size_mb = uploaded_file.size / (1024 * 1024)
-    MAX_UPLOAD_SIZE_MB = 10
-    if size_mb > MAX_UPLOAD_SIZE_MB:
-        st.error(f"File too large ({size_mb:.2f} MB). Please upload files smaller than {MAX_UPLOAD_SIZE_MB} MB.")
-    else:
-        unique_name = f"{Path(uploaded_file.name).stem}_{int(os.path.getmtime('.'))}{Path(uploaded_file.name).suffix}"
-        save_path = os.path.join(UPLOAD_DIR, unique_name)
-        with open(save_path, "wb") as f:
+    initial_size = uploaded_file.size
+    suffix = Path(uploaded_file.name).suffix.lower()
+
+    if initial_size > MAX_UPLOAD_SIZE_BYTES and ffmpeg_installed:
+        # Temporarily save uploaded file
+        temp_input_path = os.path.join(UPLOAD_DIR, "temp_upload" + suffix)
+        with open(temp_input_path, "wb") as f:
             f.write(uploaded_file.read())
 
-        suffix = Path(save_path).suffix.lower()
+        compressed_filename = f"{Path(uploaded_file.name).stem}_compressed{suffix}"
+        save_path = os.path.join(UPLOAD_DIR, compressed_filename)
 
         try:
-            if suffix in [".mp4", ".mov", ".m4v"]:
-                st.video(save_path)
-                if ffmpeg_installed:
-                    st.info("Extracting audio from video...")
-                    audio_path = extract_audio_from_video(save_path)
-                    st.audio(audio_path)
+            if suffix in [".mp3", ".wav", ".m4a", ".aac"]:
+                compress_audio(temp_input_path, save_path)
+            elif suffix in [".mp4", ".mov", ".m4v"]:
+                compress_video(temp_input_path, save_path)
+            else:
+                st.error("Unsupported file type for compression.")
+                save_path = temp_input_path
 
-                    with st.spinner("Transcribing extracted audio..."):
-                        transcript = transcribe_audio_groq(audio_path)
-                        if transcript:
-                            st.success("Transcription complete!")
-                            st.text_area("📄 Extracted Text:", transcript, height=300)
-                            st.download_button("Download Transcript as TXT", transcript,
-                                               file_name=f"{Path(save_path).stem}_transcript.txt")
-                        else:
-                            st.warning("No transcription returned.")
-                else:
-                    st.warning("Audio extraction requires ffmpeg which is not available. Please upload audio files directly.")
+            compressed_size = os.path.getsize(save_path)
+            if compressed_size > MAX_UPLOAD_SIZE_BYTES:
+                st.warning(f"File is still larger than {MAX_UPLOAD_SIZE_MB} MB after compression ({compressed_size / (1024*1024):.2f} MB). Consider using a smaller file.")
+        except Exception as e:
+            st.error(f"Compression failed: {e}")
+            save_path = temp_input_path
 
-            elif suffix in [".mp3", ".wav", ".m4a", ".aac"]:
-                st.audio(save_path)
-                with st.spinner("Transcribing audio with Groq API..."):
-                    transcript = transcribe_audio_groq(save_path)
+        if temp_input_path != save_path and os.path.exists(temp_input_path):
+            os.remove(temp_input_path)
+
+    else:
+        save_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+    try:
+        if suffix in [".mp4", ".mov", ".m4v"]:
+            st.video(save_path)
+            if ffmpeg_installed:
+                st.info("Extracting audio from video...")
+                audio_path = extract_audio_from_video(save_path)
+                st.audio(audio_path)
+
+                with st.spinner("Transcribing extracted audio..."):
+                    transcript = transcribe_audio_groq(audio_path)
                     if transcript:
                         st.success("Transcription complete!")
                         st.text_area("📄 Extracted Text:", transcript, height=300)
@@ -210,7 +248,21 @@ if uploaded_file:
                     else:
                         st.warning("No transcription returned.")
             else:
-                st.error("Unsupported file type. Please upload a supported audio or video file.")
+                st.warning("Audio extraction requires ffmpeg which is not available. Please upload audio files directly.")
 
-        except Exception as e:
-            st.error(f"Error during processing: {e}")
+        elif suffix in [".mp3", ".wav", ".m4a", ".aac"]:
+            st.audio(save_path)
+            with st.spinner("Transcribing audio with Groq API..."):
+                transcript = transcribe_audio_groq(save_path)
+                if transcript:
+                    st.success("Transcription complete!")
+                    st.text_area("📄 Extracted Text:", transcript, height=300)
+                    st.download_button("Download Transcript as TXT", transcript,
+                                       file_name=f"{Path(save_path).stem}_transcript.txt")
+                else:
+                    st.warning("No transcription returned.")
+        else:
+            st.error("Unsupported file type. Please upload a supported audio or video file.")
+
+    except Exception as e:
+        st.error(f"Error during processing: {e}")
